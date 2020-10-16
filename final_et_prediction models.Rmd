@@ -1,0 +1,217 @@
+---
+title: "finalproject_prediction models"
+author: "Ellison Taylor"
+date: "10/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+charity <- read.csv("~/Desktop/School work/BC Data Analytics/ADEC7430-KBFinal/charity.csv")
+##View(charity)
+RNGversion("3.5.3")
+library(boot)
+library(ISLR)
+library(lars)
+library(leaps)
+library(glmnet)
+library(pls)
+```
+
+
+```{r}
+# predictor transformations
+
+charity.t <- charity
+charity.t$avhv <- log(charity.t$avhv)
+# add further transformations if desired
+# for example, some statistical methods can struggle when predictors are highly skewed
+
+# set up data for analysis
+
+data.train <- charity.t[charity$part=="train",]
+x.train <- data.train[,2:21]
+c.train <- data.train[,22] # donr
+n.train.c <- length(c.train) # 3984
+y.train <- data.train[c.train==1,23] # damt for observations with donr=1
+n.train.y <- length(y.train) # 1995
+
+data.valid <- charity.t[charity$part=="valid",]
+x.valid <- data.valid[,2:21]
+c.valid <- data.valid[,22] # donr
+n.valid.c <- length(c.valid) # 2018
+y.valid <- data.valid[c.valid==1,23] # damt for observations with donr=1
+n.valid.y <- length(y.valid) # 999
+
+data.test <- charity.t[charity$part=="test",]
+n.test <- dim(data.test)[1] # 2007
+x.test <- data.test[,2:21]
+
+x.train.mean <- apply(x.train, 2, mean)
+x.train.sd <- apply(x.train, 2, sd)
+x.train.std <- t((t(x.train)-x.train.mean)/x.train.sd) # standardize to have zero mean and unit sd
+apply(x.train.std, 2, mean) # check zero mean
+apply(x.train.std, 2, sd) # check unit sd
+data.train.std.c <- data.frame(x.train.std, donr=c.train) # to classify donr
+data.train.std.y <- data.frame(x.train.std[c.train==1,], damt=y.train) # to predict damt when donr=1
+
+x.valid.std <- t((t(x.valid)-x.train.mean)/x.train.sd) # standardize using training mean and sd
+data.valid.std.c <- data.frame(x.valid.std, donr=c.valid) # to classify donr
+data.valid.std.y <- data.frame(x.valid.std[c.valid==1,], damt=y.valid) # to predict damt when donr=1
+
+x.test.std <- t((t(x.test)-x.train.mean)/x.train.sd) # standardize using training mean and sd
+data.test.std <- data.frame(x.test.std)
+```
+
+
+```{r}
+##### PREDICTION MODELING ######
+
+# Least squares regression
+
+model.pred1 <- lm(damt ~ reg1 + reg2 + reg3 + reg4 + home + chld + hinc + genf + wrat + 
+                  avhv + incm + inca + plow + npro + tgif + lgif + rgif + tdon + tlag + agif, 
+                data.train.std.y)
+summary(model.pred1)
+```
+
+```{r}
+pred.valid.pred1 <- predict(model.pred1, newdata = data.valid.std.y) # validation predictions
+mean((y.valid - pred.valid.pred1)^2) # mean prediction error
+# 1.867523
+sd((y.valid - pred.valid.pred1)^2)/sqrt(n.valid.y) # std error
+# 0.1696615
+
+# drop wrat for illustrative purposes
+model.pred2 <- lm(damt ~ reg1 + reg2 + reg3 + reg4 + home + chld + hinc + genf + 
+                  avhv + incm + inca + plow + npro + tgif + lgif + rgif + tdon + tlag + agif, 
+                data.train.std.y)
+summary(model.pred2)
+
+
+pred.valid.pred2 <- predict(model.pred2, newdata = data.valid.std.y) # validation predictions
+mean((y.valid - pred.valid.pred2)^2) # mean prediction error
+# 1.867433
+sd((y.valid - pred.valid.pred2)^2)/sqrt(n.valid.y) # std error
+# 0.1696498
+
+# Results
+
+# MPE  Model
+# 1.867523 LS1
+# 1.867433 LS2
+
+# select model.ls2 since it has minimum mean prediction error in the validation sample
+
+yhat.test <- predict(model.pred2, newdata = data.test.std) # test predictions
+
+```
+
+## Our Prediction Models
+```{r}
+## Third OLS Regression: Model three only includes variables whose coefficients had P-values below 0.05 in model two.
+model.pred3<- lm(damt ~ reg3 + reg4 + home + chld + hinc + genf + 
+                 incm +  plow + npro + rgif + tdon + agif, 
+                data.train.std.y)
+summary(model.pred3)
+
+pred.valid.pred3 <- predict(model.pred3, newdata = data.valid.std.y) # validation predictions
+mpe.pred3<-mean((y.valid - pred.valid.pred3)^2) 
+mpe.pred3
+std.err.pred3<-sd((y.valid - pred.valid.pred2)^2)/sqrt(n.valid.y) 
+std.err.pred3
+## The mpe is very slightly higher for model three than model two.
+```
+
+```{r}
+## Prediction model four: 
+model.pred4<-regsubsets(damt~., data.train.std.y)
+summary(model.pred4)
+low.bic.pred4<-which.min(model.pred4$bic)
+low.bic.pred4
+```
+
+```{r}
+## Prediction model five: Best subset selection, k-fold cross validation (k=5), regressor = number of children
+cv.error.pred5=rep(0,5)
+for (i in 1:5) {
+  glm.model.pred5<-glm(damt ~ poly(chld, i), data= data.train.std.y)
+  cv.error.pred5[i]=cv.glm(data.train.std.y,glm.model.pred5 ,K=5)$delta [1]
+}
+cv.error.pred5
+## THe CV error values show that the first degree polynomial is the best fit on the regressor 'chld'. The CV error increases with polynomial degree.
+model.pred5<-glm(damt~ chld, data = data.train.std.y)
+pred.valid.pred5 <- predict(model.pred5, newdata = data.valid.std.y) # validation predictions
+mpe.pred5<-mean((y.valid - pred.valid.pred5)^2) 
+mpe.pred5
+## 3.995
+std.err.pred5<-sd((y.valid - pred.valid.pred5)^2)/sqrt(n.valid.y) 
+std.err.pred5
+## 0.27
+
+##With a different Regressor - INCM, the median family income in a potential donor's neighborhood (in thousand $). 
+
+cv.error.pred5.2=rep(0,5)
+for (i in 1:5) {
+  glm.model.pred5.2<-glm(damt ~ poly(incm, i), data= data.train.std.y)
+  cv.error.pred5.2[i]=cv.glm(data.train.std.y,glm.model.pred5.2 ,K=5)$delta [1]
+}
+cv.error.pred5.2
+## THe CV error values show that the first degree polynomial is the best fit for the regressor 'incm', which is the median family income in a potential donor's neighborhood.
+model.pred5.2<-glm(damt~ incm, data = data.train.std.y)
+pred.valid.pred5.2 <- predict(model.pred5.2, newdata = data.valid.std.y) # validation predictions
+mpe.pred5.2<-mean((y.valid - pred.valid.pred5.2)^2) 
+mpe.pred5.2
+##4.32
+std.err.pred5.2<-sd((y.valid - pred.valid.pred5.2)^2)/sqrt(n.valid.y) 
+std.err.pred5.2
+##.29
+
+```
+
+```{r}
+##Prediction model 6: Principal Components Regression:
+model.pred6<-pcr(damt~., data=data.train.std.y ,scale=TRUE ,validation ="CV")
+summary (model.pred6)
+plot.pred6<-validationplot(model.pred6 ,val.type="MSEP", main= "Donation Amount: Cross Validation MSE for each number of components")
+## The model with 20 components has the lowest CV score, as shown by both the summary and the graph. 
+## Since this includes all 20 components, it is essentially the same as the least squares model. The mpe and std error calculated below are the same as the least squares model. 
+
+pred.valid.pred6=predict (model.pred6 , newdata = data.valid.std.y, ncomp =20)
+mpe.pred6<-mean((y.valid - pred.valid.pred6)^2)
+mpe.pred6
+## 1.8675
+std.err.pred6<-sd((y.valid - pred.valid.pred6)^2)/sqrt(n.valid.y) 
+std.err.pred6
+## .16966
+```
+
+```{r}
+## Prediction Model 7: Partial Least Squares
+model.pred7<-plsr(damt~., data=data.train.std.y ,scale=TRUE ,validation ="CV")
+summary(model.pred7)
+validationplot(model.pred7 ,val.type="MSEP", main = "Donation Amount: CV MSE for components, Partial Least Squares Model")
+## % var explained is at it's maximum for 'damt' at m = 8 and above
+## CV is at it's minimum at  m = 5 and above
+## Use M = 5
+pred.valid.pred7=predict (model.pred7 , newdata = data.valid.std.y, ncomp =5)
+mpe.pred7<-mean((y.valid - pred.valid.pred7)^2)
+mpe.pred7
+## 1.866814
+std.err.pred7<-sd((y.valid - pred.valid.pred7)^2)/sqrt(n.valid.y) 
+std.err.pred7
+## 0.1696325
+```
+
+```{r}
+## Prediction Model 8: Ridge Regression
+x=model.matrix(damt~., data.train.std.y)[,-1]
+y=data.train.std.y$damt
+lambdas <- 10^seq(10, -2, length = 100)
+lambda.model.pred8<- cv.glmnet(x, y, alpha = 0, lambda = lambdas)
+plot(lambda.model.pred8)
+```
+
